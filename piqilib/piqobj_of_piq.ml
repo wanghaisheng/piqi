@@ -1,5 +1,5 @@
 (*
-   Copyright 2009, 2010, 2011, 2012, 2013 Anton Lavrik
+   Copyright 2009, 2010, 2011, 2012, 2013, 2014 Anton Lavrik
 
    Licensed under the Apache License, Version 2.0 (the "License");
    you may not use this file except in compliance with the License.
@@ -106,18 +106,13 @@ let error obj s =
 (* TODO, XXX: handle integer overflows *)
 let rec parse_int (obj: piq_ast) =
   match obj with
-    | `int x -> `int (Piqloc.addrefret obj x)
-    | `uint x -> `uint (Piqloc.addrefret obj x)
-    | `raw_word x ->
-        let t =
-          try Piq_parser.parse_int x
-          with Failure e -> error obj e
-        in parse_int t
+    | `int (x, _) -> `int (Piqloc.addrefret obj x)
+    | `uint (x, _) -> `uint (Piqloc.addrefret obj x)
     | o -> error o "int constant expected"
 
 
 let uint64_to_float x =
-  if Int64.compare x 0L < 0 (* big unsinged? *)
+  if Int64.compare x 0L < 0 (* big unsigned? *)
   then
     let s = Printf.sprintf "%Lu" x in
     float_of_string s
@@ -127,21 +122,14 @@ let uint64_to_float x =
 
 let rec parse_float (obj: piq_ast) =
   match obj with
-    | `int x -> Int64.to_float x
-    | `uint x -> uint64_to_float x
-    | `float x -> x
-    | `raw_word x ->
-        let t =
-          try Piq_parser.parse_number x
-          with Failure e -> error obj e
-        in parse_float t
+    | `int (x, _) -> Int64.to_float x
+    | `uint (x, _) -> uint64_to_float x
+    | `float (x, _) -> x
     | o -> error o "float constant expected"
 
 
 let parse_bool (x :piq_ast) = match x with
   | `bool x -> x
-  | `raw_word "true" -> true
-  | `raw_word "false" -> false
   | o -> error o "boolean constant expected"
 
 
@@ -151,8 +139,7 @@ let parse_string ?piq_format (x :piq_ast) =
   in
   let check_piq_format () =
     match piq_format, x with
-      | Some `word, `word _
-      | Some `word, `raw_word _ -> (); (* ok *)
+      | Some `word, `word _ -> (); (* ok *)
       | Some `word, `text _ ->
           error x "word literal expected instead of verbatim text"
       | Some `word, _ (* various string literals *) ->
@@ -164,23 +151,22 @@ let parse_string ?piq_format (x :piq_ast) =
       | _ -> ()
   in
   match x with
-    | `ascii_string s | `utf8_string s | `text s | `word s ->
+    | `word s when !Config.piq_relaxed_parsing -> s
+    | `ascii_string (s, _) | `utf8_string (s, _) | `text s | `word s ->
         check_piq_format ();
         s
     | `raw_binary s ->
         if Piq_lexer.is_utf8_string s
         then s
         else unicode_error s
-    | `binary s -> unicode_error s
-    | `raw_word s -> s
+    | `binary (s, _) -> unicode_error s
     | o -> error o "string expected"
 
 
 let parse_binary (x :piq_ast) = match x with
-  | `ascii_string s | `binary s | `raw_binary s -> s
-  | `utf8_string s ->
+  | `ascii_string (s, _) | `binary (s, _) | `raw_binary s -> s
+  | `utf8_string (s, _) ->
       error s "binary contains unicode characters or code points"
-  | `raw_word s -> s
   | o -> error o "binary expected"
 
 
@@ -220,7 +206,7 @@ let string_of_piqast x =
     | `name s -> s
     | `named {Piq_ast.Named.name = n} -> n
     | _ ->
-        let s = Piq_gen.to_string x in
+        let s = Piq_gen.to_string x ~nl:false in
         truncate_string s 50
 
 
@@ -242,6 +228,9 @@ let handle_unknown_variant (x: piq_ast) =
   error x ("unknown variant: " ^ string_of_piqast x)
 
 
+exception Unknown_variant
+
+
 let find_piqtype name =
   try
     Piqi_db.find_piqtype name
@@ -253,6 +242,7 @@ let find_piqtype name =
 let rec parse_obj0
       ?(piq_format: T.piq_format option)
       ~try_mode
+      ~nested_variant
       (t: T.piqtype) (x: piq_ast) :Piqobj.obj =
   (* fill the location DB *)
   let r f x = reference f x in
@@ -267,13 +257,13 @@ let rec parse_obj0
     | `any -> `any (r parse_any x)
     (* custom types *)
     | `record t -> `record (rr parse_record t x)
-    | `variant t -> `variant (rr (parse_variant ~try_mode) t x)
-    | `enum t -> `enum (rr (parse_enum ~try_mode) t x)
+    | `variant t -> `variant (rr (parse_variant ~try_mode ~nested:nested_variant) t x)
+    | `enum t -> `enum (rr (parse_enum ~try_mode ~nested:nested_variant) t x)
     | `list t -> `list (rr parse_list t x)
-    | `alias t -> `alias (reference (parse_alias t ?piq_format) x)
+    | `alias t -> `alias (reference (parse_alias t ?piq_format ~try_mode ~nested_variant) x)
 
-and parse_obj ?(try_mode=false) ?piq_format t x =
-  reference (parse_obj0 ~try_mode ?piq_format t) x
+and parse_obj ?(try_mode=false) ?(nested_variant=false) ?piq_format t x =
+  reference (parse_obj0 ~try_mode ~nested_variant ?piq_format t) x
 
 
 and parse_typed_obj ?piqtype x = 
@@ -294,7 +284,7 @@ and parse_typed_obj ?piqtype x =
 
 and try_parse_obj f t x =
   (* unwind alias to obtain its real type *)
-  match unalias t with
+  match C.unalias t with
     | _ when f.T.Field.piq_positional = Some false ->
         (* this field must be always labeled according to the explicit
          * ".piq-positional false" setting *)
@@ -596,187 +586,163 @@ and parse_repeated_field f name field_type l =
         res, rem
 
 
-and parse_variant ~try_mode t x =
+and parse_variant ~try_mode ~nested t x =
   debug "parse_variant: %s\n" (some_of t.T.Variant.name);
-  let value = parse_option t.T.Variant.option x ~try_mode in
+  let value = parse_options t.T.Variant.option x ~try_mode ~nested in
   V.({t = t; option = value})
 
 
-and parse_option ~try_mode options x =
-  try
-    let value =
-      match x with
-        | `name n ->
-            parse_name_option options n
-        | `word _ ->
-            parse_word_option options x
-        | `raw_word s ->
-            parse_raw_word_option options x s ~try_mode
-        | `bool _ ->
-            parse_bool_option options x
-        | `int _ ->
-            parse_int_option options x
-        | `float _ ->
-            parse_float_option options x
-        | `ascii_string _ | `utf8_string _ | `binary _ | `raw_binary _ ->
-            parse_string_option options x
-        | `text _ ->
-            parse_text_option options x
-        | `named {Piq_ast.Named.name = n; value = x} ->
-            parse_named_option options n x
-        | `list _ ->
-            parse_list_option options x
-        | o -> error o "invalid option"
-    in
-    Piqloc.addrefret x value
-  with Not_found ->
-    (* recurse through included co-variants *)
-    (* XXX: aliased variants are contra-variants? *)
-    let get_covariants o =
-      let open T.Option in
-      match o.name, o.piqtype with
-        | None, Some ((`variant _) as x) ->  (* co-variant *)
-            [(o, x)]
-        | None, Some ((`enum _) as x) -> (* co-variant *)
-            [(o, x)]
-        | _ -> (* contra-variant *)
-            []
-    in
-    let covariants = U.flatmap get_covariants options in
-    let value = parse_covariants covariants x ~try_mode in
-    Piqloc.addrefret x value
-
-
-and parse_covariants ~try_mode covariants x =
-  let rec aux = function
+and parse_options ~try_mode ~nested options x =
+  match options with
     | [] ->
-        (* failed to parse among variant and its covariants *)
-        handle_unknown_variant x
-    | h::t ->
-        try
-          parse_covariant h x ~try_mode
-        with Not_found -> aux t
-  in aux covariants
+        if nested
+        then raise Unknown_variant
+        else handle_unknown_variant x
+    | o::options ->
+        match parse_option o x ~try_mode with
+          | Some value ->  (* success *)
+              Piqloc.addrefret x value
+          | None ->  (* need to try other options *)
+              (match parse_nested_option o x ~try_mode with
+                | Some value ->
+                    Piqloc.addrefret x value
+                | None ->
+                    (* continue with other options *)
+                    parse_options options x ~try_mode ~nested
+              )
 
 
-and parse_covariant ~try_mode (o, v) x =
-  let obj =
-    match v with
-      | `variant v ->
-          let value = reference (parse_variant ~try_mode v) x in
-          `variant value
-      | `enum e ->
-          let value = reference (parse_enum ~try_mode e) x in
-          `enum value
-  in
-  O.({t = o; obj = Some obj})
-
-
-and parse_name_option options name =
-  let f o =
-    let open T.Option in
-    let equals_name x = equals_name x o.piq_alias name in
-    match o.name, o.piqtype with
-      | Some n, Some _ when equals_name n ->
-          error name ("value expected for option " ^ U.quote n)
-      | Some n, None -> equals_name n
-      | _, _ -> false
-  in
-  let option = List.find f options in
-  O.({t = option; obj = None})
-
-
-and parse_named_option options name x =
-  let f o =
-    let open T.Option in
-    let equals_name x = equals_name x o.piq_alias name in
-    match o.name, o.piqtype with
-      | Some n, None when equals_name n ->
-          error x ("value can not be specified for option " ^ n)
-      | Some n, Some _ -> equals_name n
-      | None, Some t when piqi_typename t = name -> true
-      | _, _ -> false
-  in parse_typed_option options f x
-
-
-and make_option_finder f o =
+and parse_nested_option ~try_mode o x =
+  (* recursively descent into non-terminal (i.e. nameless variant and enum)
+   * options
+   *
+   * NOTE: recurse into aliased nested variants as well *)
   let open T.Option in
-  match o.piqtype with
-    | None -> false
-    | Some x -> f (unalias x) (* TODO: optimize *)
+  match o.name, o.piqtype with
+    | None, Some t ->
+        let is_nested_variant =
+          match C.unalias t with
+            | `variant v ->
+                debug "parse_nested_variant: %s\n" (some_of v.T.Variant.name);
+                true
+            | `enum e ->
+                debug "parse_nested_enum: %s\n" (some_of e.T.Enum.name);
+                true
+            | _ ->
+                false
+        in
+        if is_nested_variant
+        then
+          try
+            let obj = parse_obj t x ~try_mode ~nested_variant:true in
+            Some O.({t = o; obj = Some obj})
+          with Unknown_variant ->
+            None
+        else
+          None
+    | _ ->
+        None
 
 
-and parse_bool_option options x =
-  let f = make_option_finder ((=) `bool) in
-  parse_typed_option options f x
+and parse_option ~try_mode o x =
+  match x with
+    | `name n ->
+        parse_name_option o n
+    | `named {Piq_ast.Named.name = n; value = x} ->
+        parse_named_option o n x
+    | _ ->
+        parse_option_by_type o x ~try_mode
 
 
-and parse_int_option options x =
-  let f = make_option_finder (function `int | `float -> true | _ -> false) in
-  parse_typed_option options f x
+and parse_option_by_type ~try_mode o x =
+  let open T.Option in
+  match o.name, o.piqtype with
+    | None, None ->
+        assert false
+    | Some n, None ->
+        (* try parsing word as a name, but only when the label is exact, i.e.
+         * try_mode = false
+         *
+         * by doing this, we allow using --foo bar instead of --foo.bar in
+         * relaxed Piq parsing and getopt modes *)
+        (match x with
+          |`word s when equals_name n o.piq_alias s && !Config.piq_relaxed_parsing && not try_mode ->
+              Some O.({t = o; obj = None})
+          | _ ->
+              None
+        )
+    | _, Some t ->
+        let do_parse () =
+          let obj = Some (parse_obj t x ?piq_format:o.piq_format) in
+          Some O.({t = o; obj = obj})
+        in
+        match C.unalias t, x with
+          | `bool, `bool _
+
+          | `int, `int _
+          | `int, `uint _
+
+          | `float, `int _
+          | `float, `uint _
+          | `float, `float _
+
+          | `record _, `list _
+          | `list _  , `list _ -> do_parse ()
+
+          | `string, `text _         when o.piq_format = Some `text -> do_parse ()
+          | `string, `word _         when o.piq_format = Some `word -> do_parse ()
+
+          (* XXX, TODO: do we need it?
+          | `string, `ascii_string _ when o.piq_format = Some `string -> do_parse ()
+          | `string, `utf8_string _  when o.piq_format = Some `string -> do_parse ()
+          *)
+
+          | `string, `ascii_string _
+          | `string, `utf8_string _
+          | `string, `raw_binary _
+          | `string, `text _         when o.piq_format = None -> do_parse ()
+          | `string, `word _         when o.piq_format = None && !Config.piq_relaxed_parsing -> do_parse ()
+
+          | `binary, `ascii_string _
+          | `binary, `binary _
+          | `binary, `raw_binary _ -> do_parse ()
+          | _ ->
+              None
 
 
-and parse_float_option options x =
-  let f = make_option_finder ((=) `float) in
-  parse_typed_option options f x
+
+and parse_name_option o name =
+  let open T.Option in
+  let n = C.name_of_option o in
+  if equals_name n o.piq_alias name
+  then
+    match o.name, o.piqtype with
+      | Some _, Some _ ->
+          error name ("value expected for option " ^ U.quote n)
+      | _ ->
+          Some O.({t = o; obj = None})
+  else
+    None
 
 
-and parse_word_option options x =
-  let f = make_option_finder ((=) `string) in
-  parse_typed_option options f x
+and parse_named_option o name x =
+  let open T.Option in
+  let n = C.name_of_option o in
+  if equals_name n o.piq_alias name
+  then
+    match o.name, o.piqtype with
+      | _, None ->
+          error x ("value can not be specified for option " ^ U.quote n)
+      | _, Some t ->
+          let obj = Some (parse_obj t x ?piq_format:o.piq_format) in
+          Some O.({t = o; obj = obj})
+  else
+    None
 
 
-and parse_raw_word_option ~try_mode options x s =
-  let len = String.length s in
-  let test_f = function
-    (* all of these type can have values represented as a raw (unparsed) word *)
-    | `string | `binary -> true
-    | `bool when s = "true" || s = "false" -> true
-    | `int when s.[0] >= '0' && s.[0] <= '9' -> true
-    | `int when len > 1 && s.[0] = '-' && s.[1] >= '0' && s.[1] <= '9' -> true
-    | `float -> true
-    | _ -> false
-  in
-  let f = make_option_finder test_f in
-  try
-    parse_typed_option options f x
-  with Not_found when not try_mode -> (* don't catch in try mode *)
-    (* try to parse it as a name *)
-    let f o =
-      let open T.Option in
-      match o.name, o.piqtype with
-        | Some n, None -> equals_name n o.piq_alias s
-        | _, _ -> false
-    in
-    let option = List.find f options in
-    O.({t = option; obj = None})
-
-
-and parse_string_option options x =
-  let f = make_option_finder (function `string | `binary -> true | _ -> false) in
-  parse_typed_option options f x
-
-
-and parse_text_option options x =
-  let f = make_option_finder (function `string -> true | _ -> false) in
-  parse_typed_option options f x
-
-
-and parse_list_option options x =
-  let f = make_option_finder (function `record _ | `list _ -> true | _ -> false) in
-  parse_typed_option options f x
-
-
-and parse_typed_option (options:T.Option.t list) f (x:piq_ast) :Piqobj.Option.t =
-  let option = List.find f options in
-  let option_type = some_of option.T.Option.piqtype in
-  let obj = Some (parse_obj option_type x ?piq_format:option.T.Option.piq_format) in
-  O.({t = option; obj = obj})
-
-
-and parse_enum ~try_mode t x =
+and parse_enum ~try_mode ~nested t x =
   debug "parse_enum: %s\n" (some_of t.T.Enum.name);
-  let value = parse_option t.T.Enum.option x ~try_mode in
+  let value = parse_options t.T.Enum.option x ~try_mode ~nested in
   E.({t = t; option = value})
 
 
@@ -796,7 +762,7 @@ and do_parse_list t l =
 
 
 (* XXX: roll-up multiple enclosed aliases into one? *)
-and parse_alias ?(piq_format: T.piq_format option) t x =
+and parse_alias ?(piq_format: T.piq_format option) ~try_mode ~nested_variant t x =
   (* upper-level setting overrides lower-level setting *)
   let this_piq_format = t.T.Alias.piq_format in
   let piq_format =
@@ -805,7 +771,7 @@ and parse_alias ?(piq_format: T.piq_format option) t x =
     else piq_format
   in
   let piqtype = some_of t.T.Alias.piqtype in
-  let obj = parse_obj piqtype x ?piq_format in
+  let obj = parse_obj piqtype x ?piq_format ~try_mode ~nested_variant in
   A.({t = t; obj = obj})
 
 

@@ -1,7 +1,4 @@
 description = "The Piqi library -- runtime support for multi-format Protobuf/JSON/XML/Piq data serialization and conversion"
-requires = "camlp4 ulex easy-format xmlm"
+requires = "ulex easy-format xmlm base64"
 archive(byte) = "piqilib.cma"
 archive(native) = "piqilib.cmxa"
-# keeping it for backward compatibility with existing programs using it -- it is
-# not really needed on OCaml 3.12+
-archive(syntax,preprocessor) = "pa_labelscope.cmo"

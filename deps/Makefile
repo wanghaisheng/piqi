@@ -3,22 +3,28 @@ include $(PIQI_ROOT)/make/Makefile.dirs
 
 
 ifndef SKIP-ulex
-ULEX_DIR = ulex-1.1
+DIRS += ulex
 endif
 
 ifndef SKIP-xmlm
-XMLM_DIR = xmlm-1.1.1
+DIRS += xmlm
 endif
 
 ifndef SKIP-easy-format
-EASY_FORMAT_DIR = easy-format-1.0.0
+DIRS += easy-format
 endif
 
+ifndef SKIP-optcomp
+DIRS += optcomp
+endif
 
-DIRS = $(ULEX_DIR) $(XMLM_DIR) $(EASY_FORMAT_DIR)
+ifndef SKIP-base64
+DIRS += base64
+endif
 
 
 install: dirs
 
 uninstall: dirs
 
+download: dirs

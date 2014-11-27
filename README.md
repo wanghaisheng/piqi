@@ -88,6 +88,5 @@ Files
     doc/                  project documentation
 
     make/                 makefiles and build scripts
-    deps/                 third-party dependencies (see ./NOTICE for details)
-    setenv.sh             environment configuration for running tests
+    deps/                 third-party dependencies downloaded and built by `make deps`
 

@@ -1,5 +1,5 @@
 (*
-   Copyright 2009, 2010, 2011, 2012, 2013 Anton Lavrik
+   Copyright 2009, 2010, 2011, 2012, 2013, 2014 Anton Lavrik
 
    Licensed under the Apache License, Version 2.0 (the "License");
    you may not use this file except in compliance with the License.
@@ -91,7 +91,6 @@ let piq_addrefret dst (src :piq_ast) =
     | `typed x -> f x
     | `list x -> f x
     | `form x -> f x
-    | `raw_word x -> f x
     | `raw_binary x -> f x
     | `any _ ->
         assert false
@@ -229,7 +228,7 @@ let expand_forms (x: piq_ast) :piq_ast =
           (* a single name, typename or other ast element enclosed in
            * parenthesis to control associativity -- removing parenthesis *)
           (match name with
-            | `word _ | `raw_word _ ->
+            | `word _ ->
                 (* we can't remove parenthesis around words, because it can be a
                  * 0-aritity function or macro application *)
                 obj
@@ -294,13 +293,16 @@ let expand x =
   x
 
 
-let make_string loc str_type s =
+let make_string loc str_type s raw_s =
+  let raw_s = if !Config.pp_mode then raw_s else "" in
+  let value = (s, raw_s) in
   let res =
     match str_type with
-      | L.String_a -> `ascii_string s
-      | L.String_b -> `binary s
-      | L.String_u -> `utf8_string s
+      | L.String_a -> `ascii_string value
+      | L.String_b -> `binary value
+      | L.String_u -> `utf8_string value
   in
+  Piqloc.addloc loc value;
   Piqloc.addloc loc s;
   Piqloc.addret res
 
@@ -330,15 +332,20 @@ let parse_uint s =
 
 let parse_int s =
   try
+    let raw_s = if !Config.pp_mode then s else "" in
     match s.[0] with
       | '-' -> (* negative integer *)
           let i = Int64.of_string s in
+          let res = (i, raw_s) in
           Piqloc.addref s i;
-          `int i
+          Piqloc.addref s res;
+          `int res
       | _ ->
           let i = parse_uint s in
+          let res = (i, raw_s) in
           Piqloc.addref s i;
-          `uint i
+          Piqloc.addref s res;
+          `uint res
   with Failure _ ->
       failwith ("invalid integer literal: " ^ U.quote s)
 
@@ -354,8 +361,10 @@ let parse_float s =
         | "-0.inf" -> Pervasives.neg_infinity
         | _ -> Pervasives.float_of_string s
     in
-    Piqloc.addref s f;
-    `float f
+    let raw_s = if !Config.pp_mode then s else "" in
+    let res = (f, raw_s) in
+    Piqloc.addref s res;
+    `float res
   with Failure _ ->
     failwith ("invalid floating point literal: " ^ U.quote s)
 
@@ -394,23 +403,18 @@ let read_next ?(expand_abbr=true) (fname, lexstream) =
     | L.Rbr -> error "unexpected `]'"
     | L.Lpar -> parse_form ()
     | L.Rpar -> error "unexpected `)'"
-    | L.String (t, s) ->
+    | L.String (t, s, raw_s) ->
         let loc = loc () in
-        make_string loc t s
-    | L.Word s | L.Raw_word s when s.[0] = '.' -> (* name part of the named pair *)
+        make_string loc t s raw_s
+    | L.Word s when s.[0] = '.' -> (* name part of the named pair *)
         parse_named_or_typed s make_named ~chain
-    | L.Word s | L.Raw_word s when s.[0] = ':' -> (* typename part of the typed pair *)
+    | L.Word s when s.[0] = ':' -> (* typename part of the typed pair *)
         parse_named_or_typed s make_typed ~chain
     | L.Word s ->
         let word_loc = loc () in
         Piqloc.addloc word_loc s;
         let res = parse_word s in
         Piqloc.addlocret word_loc res
-    | L.Raw_word s ->
-        (* Used in pretty-printing mode and in some other cases, similar to
-         * Word, but we don't parse it -- just pass it through. *)
-        Piqloc.addloc (loc ()) s;
-        Piqloc.addret (`raw_word s)
     | L.Raw_binary s ->
         (* Used in pretty-printing mode and in some other cases, similar to
          * String, but we don't parse it -- just pass it through. *)
@@ -482,7 +486,16 @@ let read_next ?(expand_abbr=true) (fname, lexstream) =
     let len = String.length s in
     let parse_number s =
       try parse_number s
-      with Failure e -> error e
+      with Failure e ->
+        (* allowing a string which prefix looks like a number to be parsed as
+         * word in relaxed parsing mode
+         *
+         * TODO: need a more robust implementation of integer parsing; for
+         * instance, the current implementation doesn't distingwish between
+         * integer overlows and invalid integer literals *)
+        if !Config.piq_relaxed_parsing
+        then `word s
+        else error e
     in
     match s with
       | "true" -> `bool true
@@ -512,7 +525,7 @@ let read_next ?(expand_abbr=true) (fname, lexstream) =
     let t = peek_token () in
     match t with
       (* name delimiters *)
-      | L.Word s | L.Raw_word s when s.[0] = '.' || s.[0] = ':' -> (* other name or type *)
+      | L.Word s when s.[0] = '.' || s.[0] = ':' -> (* other name or type *)
           None
       | L.Rbr | L.Rpar (* closing parenthesis or bracket *)
       | L.EOF -> (* end of input *)

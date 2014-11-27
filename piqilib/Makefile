@@ -7,18 +7,11 @@ RESULT = piqilib
 LIBINSTALL_FILES += \
 	$(wildcard $(RESULT).cma $(RESULT).cmxa $(RESULT).$(EXT_LIB) $(RES_CLIB)) \
 	$(wildcard *.cmi) \
-	$(CAMLP4_TARGETS)
 
 
 STATIC = 1 # force creation of static library (don't create dlls)
 
-PACKS = ulex easy-format xmlm
-
-
-# keeping it for backward compatibility with existing programs using it -- it is
-# not really needed on OCaml 3.12+
-INCDIRS = +camlp4
-CAMLP4_TARGETS = pa_labelscope.cmo pa_labelscope.cmi
+PACKS = ulex easy-format xmlm base64
 
 
 SOURCES = \
@@ -85,7 +78,7 @@ SOURCES = \
 	piqi_getopt.ml \
 
 
-PRE_TARGETS = piqi_version.ml META $(CAMLP4_TARGETS)
+PRE_TARGETS = piqi_version.ml META
 
 
 all: ncl
@@ -96,7 +89,7 @@ debug: dcl top
 
 # NOTE: when installing, uninstall first to avoid "already installed" error
 # also, make sure we have the byte-code version of the library built as well
-install: bcl uninstall libinstall
+install: uninstall libinstall
 
 
 uninstall: libuninstall

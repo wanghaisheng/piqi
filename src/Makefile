@@ -12,34 +12,35 @@ PACKS = unix
 # OCAMLPATH to reduce complexity of the windows build (e.g. avoid converting :
 # path separators to ; along with reverting slashes); we can't simply symlink it
 # to the build dir either because symlinks don't work on windows
-PACKS += ulex easy-format xmlm
+PACKS += ulex easy-format xmlm base64
 INCDIRS = ../piqilib
 LIBS = ../piqilib/piqilib
 
 
 SOURCES = \
 	$(PIQI_ML_FILES) \
-	piqi_main.ml \
+	main.ml \
 	\
-	piqi_json_pp.ml \
-	piqi_pp_cmd.ml \
-	piqi_convert_cmd.ml \
-	piqi_check.ml \
-	piqi_expand.ml \
-	piqi_light_cmd.ml \
-	piqi_getopt_cmd.ml \
-	piqi_compile_cmd.ml \
-	piqi_cc.ml \
+	json_pp.ml \
+	pp.ml \
+	convert.ml \
+	check.ml \
+	expand.ml \
+	light.ml \
+	getopt.ml \
+	compile.ml \
+	cc.ml \
 	\
-	piqi_to_proto.ml \
-	piqi_of_proto.ml \
+	to_proto.ml \
+	of_proto.ml \
 	\
 	piqi_http.ml \
 	piqi_rpc.ml \
-	piqi_server.ml \
-	piqi_call.ml \
 	\
-	piqi_run.ml
+	server.ml \
+	call.ml \
+	\
+	run.ml
 
 
 # make sure piqi gets re-linked when the piqilib library changes

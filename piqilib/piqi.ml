@@ -1,5 +1,5 @@
 (*
-   Copyright 2009, 2010, 2011, 2012, 2013 Anton Lavrik
+   Copyright 2009, 2010, 2011, 2012, 2013, 2014 Anton Lavrik
 
    Licensed under the Apache License, Version 2.0 (the "License");
    you may not use this file except in compliance with the License.
@@ -339,6 +339,8 @@ let check_resolved_def def =
         check_dup_names "field" names
     | `variant x ->
         let names = List.map (fun x -> name_of_option x) x.V.option in
+        (* TODO: also check duplicate names among nested variants (i.e.
+         * "non-terminal" nameless sub-variants) *)
         check_dup_names "option" names
     | `enum x ->
         let names = List.map (fun x -> name_of_option x) x.E.option in
@@ -2266,7 +2268,7 @@ let piqi_to_piqobj
   piqobj
 
 
-let piqi_of_piqobj piqobj =
+let piqi_of_piqobj ?(process=true) piqobj =
   debug "piqi_of_piqobj(0)\n";
   let piqi_ast = Piqobj_to_piq.gen_obj piqobj in
   let piqi = parse_piqi piqi_ast in
@@ -2275,7 +2277,13 @@ let piqi_of_piqobj piqobj =
    * looking for their imported dependencies in the filesystem *)
   piqi.P.is_embedded <- Some true;
 
-  let piqi = process_piqi piqi ~cache:false in
+  let piqi =
+    if process
+    then
+      process_piqi piqi ~cache:false
+    else
+      piqi
+  in
   debug "piqi_of_piqobj(-)\n";
   piqi
 
@@ -2296,7 +2304,7 @@ let piqi_to_pb ?(code = -1) piqi =
   res
 
 
-let piqi_of_pb buf =
+let piqi_of_pb ?(process=true) buf =
   debug "piqi_of_pb(0)\n";
   (* don't store location references as we're loading from the binary object *)
   Piqloc.pause ();
@@ -2307,7 +2315,7 @@ let piqi_of_pb buf =
   let piqobj =
     C.with_resolve_defaults false (fun () -> Piqobj_of_protobuf.parse_obj piqtype buf)
   in
-  let piqi = piqi_of_piqobj piqobj in
+  let piqi = piqi_of_piqobj piqobj ~process in
 
   Piqloc.resume ();
   debug "piqi_of_pb(1)\n";
