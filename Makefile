@@ -10,7 +10,7 @@ endif
 DIRS = piqilib src
 
 
-.PHONY: deps build-dir install strip distclean \
+.PHONY: deps build-dir install test strip distclean \
 	ocaml ocaml-install ocaml-uninstall \
 	doc piqi
 
@@ -22,6 +22,12 @@ ifeq ($(SYSTEM),$(filter $(SYSTEM),mingw mingw64))
 OCAMLFIND_DESTDIR := $(shell cygpath -w $(OCAMLFIND_DESTDIR))
 endif
 export OCAMLFIND_DESTDIR
+
+OCAMLPATH := $(PIQI_ROOT)/deps
+ifeq ($(SYSTEM),$(filter $(SYSTEM),mingw mingw64))
+OCAMLPATH := $(shell cygpath -w $(OCAMLPATH))
+endif
+export OCAMLPATH
 endif
 
 
@@ -84,6 +90,10 @@ ocaml-install: ocaml-uninstall
 ocaml-uninstall:
 	$(MAKE) -C deps uninstall
 	$(MAKE) -C piqilib uninstall
+
+
+test:
+	$(MAKE) -C tests
 
 
 clean::

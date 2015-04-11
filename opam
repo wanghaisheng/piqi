@@ -11,11 +11,13 @@ remove: [
   ["rm" "-f" "%{prefix}%/bin/piqi"]
   ["ocamlfind" "remove" "piqilib"]
 ]
+build-test: [make "test"]
 depends: [
   "ocamlfind"
   "easy-format"
   "ulex"
   "xmlm"
   "optcomp"
-  "base64"
+  "base64" {>="2.0.0"}
+  "base-bytes"
 ]

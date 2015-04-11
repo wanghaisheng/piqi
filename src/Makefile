@@ -12,7 +12,7 @@ PACKS = unix
 # OCAMLPATH to reduce complexity of the windows build (e.g. avoid converting :
 # path separators to ; along with reverting slashes); we can't simply symlink it
 # to the build dir either because symlinks don't work on windows
-PACKS += ulex easy-format xmlm base64
+PACKS += ulex easy-format xmlm base64 bytes
 INCDIRS = ../piqilib
 LIBS = ../piqilib/piqilib
 
@@ -21,8 +21,6 @@ SOURCES = \
 	$(PIQI_ML_FILES) \
 	main.ml \
 	\
-	json_pp.ml \
-	pp.ml \
 	convert.ml \
 	check.ml \
 	expand.ml \
@@ -30,6 +28,9 @@ SOURCES = \
 	getopt.ml \
 	compile.ml \
 	cc.ml \
+	\
+	json_pp.ml \
+	pp.ml \
 	\
 	to_proto.ml \
 	of_proto.ml \
